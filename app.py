@@ -95,18 +95,35 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
+def safe_read_csv(filepath):
+    """Safely read CSV files checking existence and non-zero file size."""
+    if os.path.exists(filepath) and os.path.getsize(filepath) > 0:
+        try:
+            return pd.read_csv(filepath)
+        except Exception:
+            return pd.DataFrame()
+    return pd.DataFrame()
+
 # Helper Data Loader
 @st.cache_data(ttl=60)
 def load_reconciliation_data():
-    if not os.path.exists('matched_pairs.csv') or not os.path.exists('exceptions.csv'):
+    need_rebuild = False
+    for fname in ['matched_pairs.csv', 'exceptions.csv', 'razorpay_settlements.csv', 'bank_statement.csv']:
+        if not os.path.exists(fname) or os.path.getsize(fname) == 0:
+            need_rebuild = True
+            break
+            
+    if need_rebuild:
+        from generate_datasets import main as gen_main
         from reconciliation_engine import ReconciliationEngine
+        gen_main()
         engine = ReconciliationEngine()
         engine.execute_reconciliation()
         
-    matched_df = pd.read_csv('matched_pairs.csv') if os.path.exists('matched_pairs.csv') else pd.DataFrame()
-    exceptions_df = pd.read_csv('exceptions.csv') if os.path.exists('exceptions.csv') else pd.DataFrame()
-    razorpay_df = pd.read_csv('razorpay_settlements.csv') if os.path.exists('razorpay_settlements.csv') else pd.DataFrame()
-    bank_df = pd.read_csv('bank_statement.csv') if os.path.exists('bank_statement.csv') else pd.DataFrame()
+    matched_df = safe_read_csv('matched_pairs.csv')
+    exceptions_df = safe_read_csv('exceptions.csv')
+    razorpay_df = safe_read_csv('razorpay_settlements.csv')
+    bank_df = safe_read_csv('bank_statement.csv')
     
     return matched_df, exceptions_df, razorpay_df, bank_df
 
