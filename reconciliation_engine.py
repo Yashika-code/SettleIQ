@@ -270,7 +270,7 @@ class ReconciliationEngine:
                         'merchant_id': gst_row.get('merchant_id', 'MERCH_DEFAULT')
                     }
                     ai_res = explain_exception(raw_rec)
-                    raw_rec.update(ai_rec)
+                    raw_rec.update(ai_res)
                     self.exceptions.append(raw_rec)
 
     def execute_reconciliation(self):
