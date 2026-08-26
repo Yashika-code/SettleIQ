@@ -160,25 +160,63 @@ def main():
 
     st.sidebar.markdown("---")
     st.sidebar.markdown("### 📤 Upload Custom Files")
-    uploaded_rp = st.sidebar.file_uploader("Upload Razorpay Settlement CSV", type=['csv'])
-    uploaded_bank = st.sidebar.file_uploader("Upload Bank Statement CSV", type=['csv'])
+    uploaded_rp = st.sidebar.file_uploader("Upload Razorpay Settlement CSV", type=['csv'], key="rp_upload")
+    uploaded_bank = st.sidebar.file_uploader("Upload Bank Statement CSV", type=['csv'], key="bank_upload")
+
+    # Track uploads in session state so they persist across reruns
+    if "custom_rp_loaded" not in st.session_state:
+        st.session_state.custom_rp_loaded = False
+    if "custom_bank_loaded" not in st.session_state:
+        st.session_state.custom_bank_loaded = False
 
     if uploaded_rp is not None:
         df_rp = pd.read_csv(uploaded_rp)
+        # Normalize column names to lowercase
+        df_rp.columns = [str(c).lower().strip() for c in df_rp.columns]
+        # Auto-detect column mapping for common Razorpay export formats
+        if 'amount' not in df_rp.columns and 'total_amount' in df_rp.columns:
+            df_rp['amount'] = df_rp['total_amount']
+        if 'utr' not in df_rp.columns:
+            df_rp['utr'] = ''
+        if 'payment_id' not in df_rp.columns and 'id' in df_rp.columns:
+            df_rp['payment_id'] = df_rp['id']
+        if 'merchant_id' not in df_rp.columns:
+            df_rp['merchant_id'] = 'MERCH_001'
+        if 'status' not in df_rp.columns:
+            df_rp['status'] = 'settled'
         df_rp.to_csv('razorpay_settlements.csv', index=False)
+        st.session_state.custom_rp_loaded = True
         st.sidebar.success(f"Loaded {len(df_rp)} Razorpay records!")
         
     if uploaded_bank is not None:
         df_bank = pd.read_csv(uploaded_bank)
+        # Normalize column names to lowercase
+        df_bank.columns = [str(c).lower().strip() for c in df_bank.columns]
+        if 'utr' not in df_bank.columns:
+            df_bank['utr'] = ''
+        if 'txn_ref' not in df_bank.columns and 'reference' in df_bank.columns:
+            df_bank['txn_ref'] = df_bank['reference']
+        elif 'txn_ref' not in df_bank.columns:
+            df_bank['txn_ref'] = [f"TXN_{i}" for i in range(len(df_bank))]
+        if 'value_date' not in df_bank.columns and 'date' in df_bank.columns:
+            df_bank['value_date'] = df_bank['date']
+        if 'merchant_id' not in df_bank.columns:
+            df_bank['merchant_id'] = 'MERCH_001'
         df_bank.to_csv('bank_statement.csv', index=False)
+        st.session_state.custom_bank_loaded = True
         st.sidebar.success(f"Loaded {len(df_bank)} Bank records!")
 
-    if (uploaded_rp or uploaded_bank) and st.sidebar.button("⚡ Reconcile Uploaded Files"):
-        from reconciliation_engine import ReconciliationEngine
-        engine = ReconciliationEngine()
-        engine.execute_reconciliation()
-        st.cache_data.clear()
-        st.rerun()
+    if st.sidebar.button("⚡ Reconcile Uploaded Files", use_container_width=True):
+        if st.session_state.custom_rp_loaded or st.session_state.custom_bank_loaded:
+            with st.spinner("Running 3-Tier Reconciliation on uploaded files..."):
+                from reconciliation_engine import ReconciliationEngine
+                engine = ReconciliationEngine()
+                engine.execute_reconciliation()
+                st.cache_data.clear()
+                st.sidebar.success("Reconciliation complete!")
+                st.rerun()
+        else:
+            st.sidebar.warning("Please upload at least one CSV file first.")
 
     st.sidebar.markdown("---")
     
