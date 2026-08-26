@@ -1,5 +1,6 @@
 import pandas as pd
 import numpy as np
+# pyrefly: ignore [missing-import]
 from faker import Faker
 import random
 from datetime import datetime, timedelta

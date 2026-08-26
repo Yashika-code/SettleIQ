@@ -19,9 +19,8 @@ class ReconciliationEngine:
         
     def load_data(self):
         """Load input CSVs into DataFrames with proper date types and column normalization."""
-        if (not os.path.exists(self.razorpay_csv) or not os.path.exists(self.bank_csv) or 
-            os.path.getsize(self.razorpay_csv) == 0 or os.path.getsize(self.bank_csv) == 0):
-            print("[*] CSV files missing or empty. Generating fresh dataset...")
+        if not os.path.exists(self.razorpay_csv) or not os.path.exists(self.bank_csv):
+            print("[*] CSV files not found. Generating fresh dataset...")
             from generate_datasets import main as gen_main
             gen_main()
             
