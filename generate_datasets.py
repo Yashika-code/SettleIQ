@@ -65,11 +65,11 @@ def generate_razorpay_data():
             print(f"[*] Razorpay API notice: {e}. Generating production-grade Razorpay Sandbox dataset.")
 
     if not data:
-        n_records = 80
+        n_records = 500
         merchants = [f"MERCH_{i:03d}" for i in range(1, 6)]
         base_date = datetime.now() - timedelta(days=30)
         
-        for i in range(n_records):
+        for i in range(1, 501):
             payment_id = f"pay_{fake.hexify(text='^^^^^^^^^^^^')}"
             amount = round(random.uniform(800, 45000), 2)
             utr = f"UTR{fake.random_number(digits=12)}" if random.random() > 0.10 else ""

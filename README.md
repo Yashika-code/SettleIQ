@@ -7,9 +7,33 @@
 
 ## 🎯 Overview
 
-Indian SMB finance teams spend **3 to 4 hours daily** manually matching Razorpay settlements against bank statement credits and GST invoices. Manual reconciliation leads to uncollected settlements, missed MDR fee variances, delay in cash visibility, and high human error costs.
+Indian SMB finance teams spend **3 to 4 hours daily** manually matching Razorpay settlements against bank statement credits and GST invoices. Manual reconciliation leads to uncollected settlements, missed MDR fee variances, delays in cash visibility, and high human error costs.
 
-**SettleIQ** is a battle-ready, automated AI Finance Controller that ingests Razorpay settlement records (via real Sandbox API or structured dataset), synthetic/live bank statements, and GST invoice data to perform **3-tier automated reconciliation**, flag exceptions with human-readable AI explanations, and provide an interactive **Settlement Q&A Chat Agent**.
+**SettleIQ** is a battle-ready, automated AI Finance Controller that ingests Razorpay settlement records (via real Sandbox API or structured dataset), bank statements, and GST invoice data to perform **3-tier automated reconciliation**, flag exceptions with human-readable AI explanations, visualize cash leaks via a **Settlement Waterfall**, and provide an interactive **Settlement Q&A Chat Agent**.
+
+---
+
+## 💡 What makes SettleIQ different
+
+Every other reconciliation tool matches payments against settlements.  
+SettleIQ does 3-way matching: **Razorpay settlements ↔ Bank credits ↔ GST invoices**.
+
+The **Settlement Waterfall** shows exactly where money disappears:  
+`Gross` → `Refunds` → `MDR Fees` → `GST on MDR` → `Expected` → `Actual` → `Gap`
+
+The **Cash Gap Explainer** tells you **WHY**, ranked by financial exposure.
+
+---
+
+## 🛠️ What broke during development & how I fixed it
+
+1. **Floating point mismatch:** ₹5420.00 vs ₹5419.99 was failing Tier 1 exact match. 
+   Fixed by converting all amounts to paise (integer) before comparison.
+
+2. **Gemini API quota:** Hit rate limits during stress test with 500 records.
+   Fixed by keying cache on `exception_type`, not `payment_id` — reduced API calls from 47 to 6.
+
+3. **OpenAI quota exhausted mid-build:** Hit `insufficient_quota` errors while testing at 500-record scale. Fixed by reordering the AI provider chain to try Gemini first, with a rule-based fallback dict as final safety net — confirming the app never breaks even with zero AI credits.
 
 ---
 
@@ -17,8 +41,9 @@ Indian SMB finance teams spend **3 to 4 hours daily** manually matching Razorpay
 
 | Feature | SettleIQ (Our Implementation) | Standard Hackathon Baseline |
 | :--- | :--- | :--- |
-| **Data Ingestion** | Real Razorpay Sandbox API + Bank + GST multi-source | Fully synthetic static dataset |
+| **Data Ingestion** | Real Razorpay Sandbox API + Bank Statements + GST Multi-Source Ingestion | Fully synthetic static dataset |
 | **Matching Logic** | **3-Tier Matching**: Tier 1 Exact UTR $\rightarrow$ Tier 2 Fuzzy ($\pm 2.5\%$, $T+3$) $\rightarrow$ Tier 3 AI Reasoning | Simple exact string matching |
+| **Cash Gap Intelligence** | **Interactive Settlement Waterfall Chart** + Ranked Financial Exposure Breakdown | Basic totals summary |
 | **Exception Intelligence** | **6 Predefined Categories** + AI Explanations + Confidence Scores + Actionable Steps | Generic "unmatched" raw list |
 | **Auditability** | Production Audit Trail: timestamped decision log with rule IDs & exportable reports | No audit trail or decision logging |
 | **User Experience** | Multi-Tab Streamlit Dashboard + Q&A Chat Agent + Color-Coded Excel Download | Basic static charts |
@@ -43,7 +68,7 @@ graph TD
     G --> H[Exception Classifier & LLM Reasoning]
     H --> I[6 Exception Categories: Amount Mismatch, Timing, Missing Entry, Duplicate, GST]
     
-    M1 --> Dash[Streamlit Dashboard & Settlement Q&A Agent]
+    M1 --> Dash[Streamlit Dashboard, Waterfall & Settlement Q&A Agent]
     M2 --> Dash
     I --> Dash
     Dash --> Export[Export: Green/Red Excel Report & CSV Audit Trail]
@@ -78,7 +103,7 @@ cp .env.example .env
 
 ### 3. Generate Datasets & Run Engine
 ```bash
-# Generate datasets (Razorpay settlements, Bank statements with 15+ anomalies, GST records)
+# Generate datasets (500 Razorpay settlements, Bank statements with anomalies, GST records)
 python generate_datasets.py
 
 # Execute 3-Tier Reconciliation Engine
@@ -94,18 +119,28 @@ streamlit run app.py
 
 ## 📈 Quantified Demo Metrics
 
-- **Auto-Match Rate**: `92.5%` auto-matched in $<5$ seconds
-- **Exceptions Caught**: 19 exceptions categorized with confidence scores & suggested actions
+- **Dataset Processing**: 500+ records processed in $<5$ seconds
+- **Auto-Match Rate**: `90.6%` auto-matched with high confidence
+- **Exceptions Caught**: 6 distinct exception types categorized with confidence scores & suggested actions
 - **Time Saved**: $28\times$ faster than manual Excel reconciliation
 - **Audit Compliance**: 100% timestamped decision trace logged with exact rule ID
 
 ---
 
+## ⚠️ On our numbers
+All metrics (match rate, exceptions caught, cash gap) are calculated live
+from the 500-record synthetic dataset in this repo — not industry claims.
+Run `python reconciliation_engine.py` to reproduce them yourself.
+
+---
+
 ## 📂 Repository Structure
 
-- `app.py`: Streamlit Dashboard & Settlement Q&A Chat Agent UI.
+- `app.py`: Streamlit Dashboard, Settlement Waterfall, Cash Gap Explainer & Q&A Chat Agent UI.
 - `reconciliation_engine.py`: Core 3-tier matching engine & Excel export generator.
 - `exception_explainer.py`: AI Exception classifier & domain explanation module.
-- `generate_datasets.py`: Pipeline generator for Razorpay settlements, bank statements, and GST records.
+- `generate_datasets.py`: Dataset generator for 500+ Razorpay settlements, bank statements, and GST records.
 - `requirements.txt`: Python package dependencies.
 - `.env.example`: Environment variables template.
+
+

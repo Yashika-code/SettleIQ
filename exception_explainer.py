@@ -14,7 +14,8 @@ EXCEPTION_CATEGORIES = {
 }
 
 # Circuit breaker flag to prevent slow repeated API timeouts
-_OPENAI_WORKING = True
+_LLM_WORKING = True
+_EXPLANATION_CACHE = {}
 
 def get_heuristic_explanation(record):
     """Generate high-quality domain-specific fallback explanations when LLM API is unavailable."""
@@ -87,15 +88,26 @@ def get_heuristic_explanation(record):
     }
 
 def explain_exception(record):
-    """Classify and generate human-readable AI explanation using LLM (with instant circuit-breaker fallback)."""
-    global _OPENAI_WORKING
-    api_key = os.getenv("OPENAI_API_KEY", "")
+    """Classify and generate human-readable AI explanation using LLM (with exception-type caching & circuit-breaker fallback)."""
+    global _LLM_WORKING, _EXPLANATION_CACHE
     
-    if _OPENAI_WORKING and api_key and not api_key.startswith("sk-proj-xxxx"):
-        try:
-            import openai
-            client = openai.OpenAI(api_key=api_key)
-            prompt = f"""
+    exc_type = record.get('exception_type', 'Missing Entry (Bank)')
+    
+    # Check type-keyed cache first to reduce API calls from N to 6
+    if exc_type in _EXPLANATION_CACHE:
+        cached = dict(_EXPLANATION_CACHE[exc_type])
+        # Personalize payment_id and amount while using cached AI reasoning pattern
+        if 'payment_id' in record:
+            cached['payment_id'] = record['payment_id']
+        if 'amount' in record:
+            cached['amount'] = record['amount']
+        return cached
+
+    openai_key = os.getenv("OPENAI_API_KEY", "")
+    gemini_key = os.getenv("GEMINI_API_KEY", "") or os.getenv("GOOGLE_API_KEY", "")
+
+    if _LLM_WORKING and (openai_key or gemini_key):
+        prompt = f"""
 You are a senior financial controller specializing in Razorpay payment settlements, bank reconciliations, and Indian SMB accounting.
 
 Analyze this unreconciled record:
@@ -110,19 +122,48 @@ Provide JSON response ONLY with keys:
 - "ai_explanation": String (clear 2-3 sentence domain explanation)
 - "suggested_action": String (actionable guidance for finance team)
 """
-            response = client.chat.completions.create(
-                model="gpt-4o-mini",
-                messages=[
-                    {"role": "system", "content": "You are an expert AI Finance Controller. Respond in valid JSON only."},
-                    {"role": "user", "content": prompt}
-                ],
-                temperature=0.2,
-                timeout=3.0
-            )
-            result = json.loads(response.choices[0].message.content)
-            return result
-        except Exception as e:
-            _OPENAI_WORKING = False
-            print(f"[*] OpenAI API notice ({e}). Fast circuit breaker activated -> switching to domain heuristic explainer.")
-            
-    return get_heuristic_explanation(record)
+        # Try Gemini first
+        if gemini_key:
+            try:
+                from google import genai
+                client = genai.Client(api_key=gemini_key)
+                res = client.models.generate_content(
+                    model='gemini-2.5-flash',
+                    contents=prompt,
+                )
+                content_text = res.text
+                if "```json" in content_text:
+                    content_text = content_text.split("```json")[1].split("```")[0].strip()
+                elif "```" in content_text:
+                    content_text = content_text.split("```")[1].split("```")[0].strip()
+                result = json.loads(content_text)
+                _EXPLANATION_CACHE[exc_type] = result
+                return result
+            except Exception:
+                pass
+
+        # Try OpenAI secondary
+        if openai_key and not openai_key.startswith("sk-proj-xxxx"):
+            try:
+                import openai
+                client = openai.OpenAI(api_key=openai_key)
+                response = client.chat.completions.create(
+                    model="gpt-4o-mini",
+                    messages=[
+                        {"role": "system", "content": "You are an expert AI Finance Controller. Respond in valid JSON only."},
+                        {"role": "user", "content": prompt}
+                    ],
+                    temperature=0.2,
+                    timeout=3.0
+                )
+                result = json.loads(response.choices[0].message.content)
+                _EXPLANATION_CACHE[exc_type] = result
+                return result
+            except Exception:
+                pass
+
+        _LLM_WORKING = False
+
+    res = get_heuristic_explanation(record)
+    _EXPLANATION_CACHE[exc_type] = res
+    return res

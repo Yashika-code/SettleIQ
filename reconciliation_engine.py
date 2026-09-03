@@ -23,25 +23,57 @@ class ReconciliationEngine:
             print("[*] CSV files not found. Generating fresh dataset...")
             from generate_datasets import main as gen_main
             gen_main()
-            
+        
         self.razorpay_df = pd.read_csv(self.razorpay_csv)
         self.bank_df = pd.read_csv(self.bank_csv)
         if os.path.exists(self.gst_csv):
             self.gst_df = pd.read_csv(self.gst_csv)
-            
-        # Standardize column names to lowercase stripped strings
-        self.razorpay_df.columns = [str(c).lower().strip() for c in self.razorpay_df.columns]
-        self.bank_df.columns = [str(c).lower().strip() for c in self.bank_df.columns]
+
+        # ── CHANGE 1: Normalize column names (spaces→underscores, lowercase) ──
+        def _norm_cols(df):
+            df.columns = (
+            df.columns
+              .str.lower()
+              .str.strip()
+              .str.replace(r'\s+', '_', regex=True)
+              .str.replace(r'[^a-z0-9_]', '', regex=True)
+            )
+            return df
+
+        self.razorpay_df = _norm_cols(self.razorpay_df)
+        self.bank_df     = _norm_cols(self.bank_df)
         if not self.gst_df.empty:
-            self.gst_df.columns = [str(c).lower().strip() for c in self.gst_df.columns]
-            
-        # Normalize alternative column aliases (e.g., rrn -> utr, txn_date -> date)
+            self.gst_df  = _norm_cols(self.gst_df)
+
+        # # ── DEBUG: print actual column names (remove once working) ──
+        # print(f"  [DEBUG] RZP cols : {self.razorpay_df.columns.tolist()}")
+        # print(f"  [DEBUG] Bank cols: {self.bank_df.columns.tolist()}")
+
+        # ── CHANGE 2: RRN aliases (already existed, kept as-is) ──
         if 'rrn' in self.razorpay_df.columns and 'utr' not in self.razorpay_df.columns:
             self.razorpay_df['utr'] = self.razorpay_df['rrn']
         if 'rrn' in self.bank_df.columns and 'utr' not in self.bank_df.columns:
             self.bank_df['utr'] = self.bank_df['rrn']
-            
-        # Ensure mandatory columns exist with default fallbacks
+
+        # ── CHANGE 2: payment_id aliases (NEW) ──
+        rzp_id_aliases = ['id', 'paymentid', 'payment_ref', 'rzp_payment_id', 'entity_id', 'order_id']
+        if 'payment_id' not in self.razorpay_df.columns:
+            for alias in rzp_id_aliases:
+                if alias in self.razorpay_df.columns:
+                    self.razorpay_df.rename(columns={alias: 'payment_id'}, inplace=True)
+                    print(f"  → Aliased '{alias}' → 'payment_id'")
+                    break
+
+        # ── CHANGE 2: txn_ref aliases (NEW) ──
+        bank_ref_aliases = ['reference', 'ref_no', 'transaction_ref', 'chq_ref', 'cheque_no', 'narration_ref']
+        if 'txn_ref' not in self.bank_df.columns:
+            for alias in bank_ref_aliases:
+                if alias in self.bank_df.columns:
+                    self.bank_df.rename(columns={alias: 'txn_ref'}, inplace=True)
+                    print(f"  → Aliased '{alias}' → 'txn_ref'")
+                    break
+
+        # ── Mandatory columns fallback (already existed, kept as-is) ──
         for df, req_cols in [(self.razorpay_df, ['utr', 'payment_id', 'amount', 'date', 'merchant_id']),
                              (self.bank_df, ['utr', 'txn_ref', 'amount', 'value_date', 'merchant_id'])]:
             for col in req_cols:
@@ -57,15 +89,19 @@ class ReconciliationEngine:
                     elif col in ['merchant_id']:
                         df[col] = 'MERCH_DEFAULT'
 
-        # Convert date columns to datetime
+        # ── Date conversion (already existed, kept as-is) ──
         self.razorpay_df['date'] = pd.to_datetime(self.razorpay_df['date'], errors='coerce').fillna(pd.Timestamp.now())
         self.bank_df['value_date'] = pd.to_datetime(self.bank_df['value_date'], errors='coerce').fillna(pd.Timestamp.now())
         if not self.gst_df.empty and 'date' in self.gst_df.columns:
             self.gst_df['date'] = pd.to_datetime(self.gst_df['date'], errors='coerce').fillna(pd.Timestamp.now())
-            
-        # Clean UTR strings
+        
+        # ── String cleaning (already existed, kept as-is) ──
         self.razorpay_df['utr'] = self.razorpay_df['utr'].fillna('').astype(str).str.strip()
         self.bank_df['utr'] = self.bank_df['utr'].fillna('').astype(str).str.strip()
+        self.razorpay_df['payment_id'] = self.razorpay_df['payment_id'].fillna('').astype(str).str.strip()
+        self.razorpay_df['merchant_id'] = self.razorpay_df['merchant_id'].fillna('').astype(str).str.strip()
+        self.bank_df['txn_ref'] = self.bank_df['txn_ref'].fillna('').astype(str).str.strip()
+        self.bank_df['merchant_id'] = self.bank_df['merchant_id'].fillna('').astype(str).str.strip()
 
     def run_tier1_exact_utr(self):
         """Tier 1: Exact UTR/RRN Matching."""
@@ -88,9 +124,16 @@ class ReconciliationEngine:
         matched_bank_refs = set()
         
         for _, row in merged.iterrows():
-            if abs(row['amount_rp'] - row['amount_bank']) <= 0.05:
+            # Convert amounts to integer paise to eliminate floating point mismatches
+            rp_paise = int(round(row['amount_rp'] * 100))
+            bank_paise = int(round(row['amount_bank'] * 100))
+            if abs(rp_paise - bank_paise) <= 5: # 5 paise tolerance
                 timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                 self.matched_pairs.append({
+                    'tier': 1,
+                    'rule': 'EXACT_REF_MATCH',
+                    'match_method': 'Deterministic Match',
+                    'status': 'MATCHED',
                     'match_type': 'Tier 1 (Exact UTR)',
                     'payment_id': row['payment_id'],
                     'utr': row['utr'],
@@ -99,8 +142,8 @@ class ReconciliationEngine:
                     'bank_amount': row['amount_bank'],
                     'razorpay_date': row['date'].strftime('%Y-%m-%d') if hasattr(row['date'], 'strftime') else str(row['date'])[:10],
                     'bank_date': row['value_date'].strftime('%Y-%m-%d') if hasattr(row['value_date'], 'strftime') else str(row['value_date'])[:10],
-                    'confidence': 0.98,
-                    'rule_fired': 'Exact UTR & Amount Match',
+                    'confidence': 1.0,
+                    'rule_fired': 'Deterministic Match (EXACT_REF_MATCH)',
                     'timestamp': timestamp
                 })
                 matched_rp_ids.add(row['payment_id'])
@@ -145,6 +188,10 @@ class ReconciliationEngine:
             if best_match is not None:
                 timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                 self.matched_pairs.append({
+                    'tier': 2,
+                    'rule': 'FUZZY_AMT_DATE_MATCH',
+                    'match_method': 'Scored Fuzzy Match',
+                    'status': 'MATCHED',
                     'match_type': 'Tier 2 (Fuzzy Match)',
                     'payment_id': rp_row['payment_id'],
                     'utr': rp_row['utr'] or best_match['utr'] or 'N/A',
@@ -154,7 +201,7 @@ class ReconciliationEngine:
                     'razorpay_date': rp_row['date'].strftime('%Y-%m-%d'),
                     'bank_date': best_match['value_date'].strftime('%Y-%m-%d'),
                     'confidence': best_score,
-                    'rule_fired': f'Fuzzy Match (Amt Var: {round(abs(rp_row["amount"] - best_match["amount"]), 2)}, Date Window: T+{(best_match["value_date"] - rp_row["date"]).days})',
+                    'rule_fired': f'FUZZY_AMT_DATE_MATCH (Amt Var: {round(abs(rp_row["amount"] - best_match["amount"]), 2)}, Date Window: T+{(best_match["value_date"] - rp_row["date"]).days})',
                     'timestamp': timestamp
                 })
                 new_matched_rp.add(rp_row['payment_id'])
@@ -298,6 +345,7 @@ class ReconciliationEngine:
         self.export_excel_report(matched_df, exceptions_df)
         
         total_rp = len(self.razorpay_df)
+        unresolved_rp = max(0, total_rp - len(matched_df))
         match_rate = round((len(matched_df) / total_rp) * 100, 1) if total_rp > 0 else 0
         
         summary = {
@@ -305,6 +353,7 @@ class ReconciliationEngine:
             'total_matched': len(matched_df),
             'tier1_matches': t1_count,
             'tier2_matches': t2_count,
+            'unresolved_razorpay_records': unresolved_rp,
             'match_rate_pct': match_rate,
             'exceptions_count': len(exceptions_df),
             'total_amount_cleared': matched_df['bank_amount'].sum() if not matched_df.empty else 0,
@@ -312,7 +361,7 @@ class ReconciliationEngine:
         }
         
         print("\n--- RECONCILIATION METRICS SUMMARY ---")
-        print(f"Match Rate: {match_rate}% | Matched: {len(matched_df)} | Exceptions: {len(exceptions_df)}")
+        print(f"Match Rate: {match_rate}% | Total RZP: {total_rp} | Matched: {len(matched_df)} (Exact: {t1_count}, Fuzzy: {t2_count}) | Unresolved RZP: {unresolved_rp} | Multi-Source Exceptions: {len(exceptions_df)}")
         print(f"Cleared Position: RS {summary['total_amount_cleared']:,.2f} | At Risk: RS {summary['amount_at_risk']:,.2f}")
         return summary
 
