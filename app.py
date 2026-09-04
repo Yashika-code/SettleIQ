@@ -708,7 +708,20 @@ Finance Controller Desk
                         response = "All payments are currently 100% reconciled!"
                         
             elif "match rate" in query_lower or "overall" in query_lower or "performance" in query_lower:
-                response = f"📊 **SettleIQ Current Metrics Summary:**\n- **Auto-Match Rate:** `{match_rate}%`\n- **Cleared Settlements:** `{matched_count}` records (₹{cleared_amt:,.2f})\n- **Pending Exceptions:** `{exc_count}` records (₹{risk_amt:,.2f} at risk)"
+                try:
+                    _match_rate    = match_rate
+                    _matched_count = unique_matched_rp
+                    _exc_count     = exc_count
+                    _cleared_amt   = cleared_amt
+                    _risk_amt      = risk_amt
+                    response = (
+                        f"📊 **SettleIQ Current Metrics Summary:**\n"
+                        f"- **Auto-Match Rate:** `{_match_rate}%`\n"
+                        f"- **Cleared Settlements:** `{_matched_count}` records (₹{_cleared_amt:,.2f})\n"
+                        f"- **Pending Exceptions:** `{_exc_count}` records (₹{_risk_amt:,.2f} at risk)"
+                    )
+                except Exception as e:
+                    response = f"⚠️ Could not load metrics: {str(e)}"
                 
             elif "risk" in query_lower or "at risk" in query_lower or "amount" in query_lower:
                 response = f"⚠️ **Cash Position at Risk:** Total unreconciled amount is **₹{risk_amt:,.2f}** across {exc_count} flagged exceptions. Top risk category is **{exceptions_df.iloc[0]['exception_type'] if not exceptions_df.empty else 'None'}**."
